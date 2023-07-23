@@ -1,8 +1,9 @@
 package main
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log"
@@ -18,15 +19,18 @@ import (
 	"github.com/joho/godotenv"
 )
 
-func zipDirectory(dirPath string, zipFileName string) error {
-	zipFile, err := os.Create(zipFileName)
+func compressDirectory(dirPath string, tarGzFileName string) error {
+	tarGzFile, err := os.Create(tarGzFileName)
 	if err != nil {
 		return err
 	}
-	defer zipFile.Close()
+	defer tarGzFile.Close()
 
-	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	gzipWriter := gzip.NewWriter(tarGzFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
 
 	return filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -42,20 +46,26 @@ func zipDirectory(dirPath string, zipFileName string) error {
 			return err
 		}
 
-		zipEntryName := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
+		tarEntryName := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
 
-		fileToZip, err := os.Open(filePath)
+		fileToTar, err := os.Open(filePath)
 		if err != nil {
 			return err
 		}
-		defer fileToZip.Close()
+		defer fileToTar.Close()
 
-		zipFile, err := zipWriter.Create(zipEntryName)
-		if err != nil {
+		header := &tar.Header{
+			Name:    tarEntryName,
+			Size:    info.Size(),
+			Mode:    int64(info.Mode()),
+			ModTime: info.ModTime(),
+		}
+
+		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}
 
-		_, err = io.Copy(zipFile, fileToZip)
+		_, err = io.Copy(tarWriter, fileToTar)
 		if err != nil {
 			return err
 		}
@@ -85,12 +95,12 @@ func main() {
 	bucketName := os.Getenv("AWS_S3_BUCKET_NAME")
 	filePath := resolvePath(os.Getenv("OBSIDIAN_VAULT_PATH"))
 
-	zipName := time.Now().Format("2006-01-02_15-04-05") + ".zip"
-	err = zipDirectory(filePath, zipName)
+	tarGzName := time.Now().Format("2006-01-02_15-04-05") + ".tar.gz"
+	err = compressDirectory(filePath, tarGzName)
 	if err != nil {
-		log.Fatal("Error zipping directory:", err)
+		log.Fatal("Error compressing directory:", err)
 	}
-	zipPath := filepath.Join(".", zipName)
+	tarGzPath := filepath.Join(".", tarGzName)
 
 	// Create a new AWS session based on the environment variables
 	sess := session.Must(session.NewSession(&aws.Config{
@@ -106,7 +116,7 @@ func main() {
 	svc := s3.New(sess)
 
 	// Open the file
-	file, err := os.Open(zipPath)
+	file, err := os.Open(tarGzPath)
 	if err != nil {
 		log.Fatal("Error opening file:", err)
 	}
@@ -121,7 +131,7 @@ func main() {
 	// Upload the file to S3
 	_, err = svc.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(bucketName),
-		Key:    aws.String(filepath.Base(zipPath)),
+		Key:    aws.String(filepath.Base(tarGzPath)),
 		Body:   bytes.NewReader(buffer),
 	})
 	if err != nil {
@@ -131,5 +141,5 @@ func main() {
 	fmt.Println("File uploaded successfully.")
 
 	// Delete the zip file
-	err = os.Remove(zipPath)
+	err = os.Remove(tarGzPath)
 }
