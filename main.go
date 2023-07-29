@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/joho/godotenv"
 )
 
@@ -114,6 +115,18 @@ func main() {
 
 	// Create an S3 service client
 	svc := s3.New(sess)
+
+	// Setup BatchDeleteIterator to iterate through a list of objects.
+	iter := s3manager.NewDeleteListIterator(svc, &s3.ListObjectsInput{
+		Bucket: aws.String(bucketName),
+	})
+
+	// Traverse iterator deleting each object
+	if err := s3manager.NewBatchDeleteWithClient(svc).Delete(aws.BackgroundContext(), iter); err != nil {
+		log.Fatalf("Unable to delete objects from bucket %q, %v", bucketName, err)
+	}
+
+	fmt.Println("All files deleted successfully.")
 
 	// Open the file
 	file, err := os.Open(tarGzPath)
